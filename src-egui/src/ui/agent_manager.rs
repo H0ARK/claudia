@@ -39,6 +39,7 @@ impl AgentManagerView {
         egui::TopBottomPanel::top("agent_toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("➕ Create Agent").clicked() {
+                    println!("Create Agent button clicked!");
                     self.show_create_dialog = true;
                     self.new_agent = TauriAgent::default();
                 }
@@ -110,10 +111,12 @@ impl AgentManagerView {
         
         match backend_bridge.list_agents() {
             Ok(agents) => {
+                println!("Loaded {} agents", agents.len());
                 self.agents = agents;
                 self.loading = false;
             }
             Err(e) => {
+                println!("Error loading agents: {}", e);
                 self.error_message = Some(format!("Failed to load agents: {}", e));
                 self.loading = false;
             }
@@ -121,12 +124,15 @@ impl AgentManagerView {
     }
 
     fn create_agent(&mut self, backend_bridge: &Arc<BackendBridge>, agent: TauriAgent) {
+        println!("create_agent called with agent: {:?}", agent.name);
         match backend_bridge.create_agent(&agent) {
-            Ok(_) => {
+            Ok(id) => {
+                println!("Agent created successfully with ID: {}", id);
                 self.needs_refresh = true;
                 self.show_create_dialog = false;
             }
             Err(e) => {
+                println!("Failed to create agent: {}", e);
                 self.error_message = Some(format!("Failed to create agent: {}", e));
             }
         }
@@ -263,6 +269,7 @@ impl AgentManagerView {
         egui::Window::new("Create New Agent")
             .collapsible(false)
             .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
@@ -314,12 +321,17 @@ impl AgentManagerView {
                 ui.add_space(10.0);
                 
                 ui.horizontal(|ui| {
-                    if ui.button("Create").clicked() && !self.new_agent.name.is_empty() {
-                        let agent = self.new_agent.clone();
-                        self.create_agent(backend_bridge, agent);
-                    }
+                    let create_enabled = !self.new_agent.name.is_empty();
+                    ui.add_enabled_ui(create_enabled, |ui| {
+                        if ui.button("Create").clicked() {
+                            println!("Create button in dialog clicked! Agent name: {}", self.new_agent.name);
+                            let agent = self.new_agent.clone();
+                            self.create_agent(backend_bridge, agent);
+                        }
+                    });
                     
                     if ui.button("Cancel").clicked() {
+                        println!("Cancel button clicked!");
                         self.show_create_dialog = false;
                         self.new_agent = TauriAgent::default();
                     }

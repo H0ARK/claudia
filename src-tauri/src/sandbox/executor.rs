@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+#[cfg(unix)]
 use gaol::sandbox::{ChildSandbox, ChildSandboxMethods, Command as GaolCommand, Sandbox, SandboxMethods};
 use log::{info, warn, error, debug};
 use std::env;

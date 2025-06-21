@@ -1,25 +1,191 @@
-# Logs
-logs
-*.log
+# Rust/Cargo
+target/
+Cargo.lock
+*.rs.bk
+*.pdb
+
+# Tauri
+src-tauri/target/
+src-tauri/WixTools/
+dist/
+
+# Egui
+src-egui/target/
+
+# Dependencies
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
+.pnpm-store/
+bun.lockb
 
-node_modules
-dist
-dist-ssr
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
 *.local
+temp_lib/
 
-# Editor directories and files
+# IDE and Editor files
 .vscode/*
 !.vscode/extensions.json
-.idea
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+*.sublime-workspace
+*.sublime-project
+.vim/
+.nvim/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-temp_lib/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+logs/
+*.log
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Test coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+# But allow test databases
+!test_*.db
+
+# Temporary files
+*.tmp
+*.temp
+.temp/
+.tmp/
+tmp/
+temp/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Python (if any scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Security
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+# But allow test certs
+!test_*.pem
+
+# Custom project files
+/agents.db
+/sandbox_violations.log
+/claude_sessions/
+/checkpoint_data/
+/agent_runs/
+/session_output/
+
+# Test outputs
+/test_results/
+/test_output/
+*.test.js
+*.spec.js
+
+# WSL specific
+*.lnk
+
+# Cache directories
+.cache/
+.parcel-cache/
+.turbo/
+
+# Generated files
+*.generated.*
+generated/
+
+# Large binary files
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.msi
+*.msix
+*.appx
+*.snap
+
+# Archives (except specific ones you want to track)
+*.zip
+*.tar.gz
+*.tar.bz2
+*.rar
+*.7z
+# But allow specific archives
+!release_*.zip
+
+# Media files (if any demos)
+*.mp4
+*.avi
+*.mov
+*.mp3
+*.wav
+# But allow specific demo files
+!demo_*.mp4
+
+# OS files
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+desktop.ini
+
+# Documentation build
+docs/_build/
+docs/.doctrees/
+
+# Rust workspace
+/target/
+
+# But allow specific configuration files
+!.gitignore
+!.gitattributes
+!.editorconfig
+!.rustfmt.toml
+!.clippy.toml
+!cargo.toml
+!Cargo.toml

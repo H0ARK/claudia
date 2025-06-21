@@ -1,8 +1,9 @@
 use crate::orchestration::OrchestrationEngine;
 use crate::ui::{AgentManagerView, OrchestratorView, WorkflowEditorView};
-use crate::utils::ipc::IpcClient;
+use crate::utils::BackendBridge;
 use eframe::CreationContext;
 use egui::Context;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppView {
@@ -19,7 +20,7 @@ pub struct ClaudiaOrchestratorApp {
     agent_manager_view: AgentManagerView,
     workflow_editor_view: WorkflowEditorView,
     orchestration_engine: OrchestrationEngine,
-    ipc_client: IpcClient,
+    backend_bridge: Arc<BackendBridge>,
     dark_mode: bool,
 }
 
@@ -31,8 +32,14 @@ impl ClaudiaOrchestratorApp {
         // Configure style
         configure_style(&cc.egui_ctx);
 
-        // Initialize IPC client for backend communication
-        let ipc_client = IpcClient::new("http://localhost:1420"); // Tauri default port
+        // Initialize backend bridge for direct database access
+        let backend_bridge = match BackendBridge::new() {
+            Ok(bridge) => Arc::new(bridge),
+            Err(e) => {
+                eprintln!("Failed to initialize backend bridge: {:?}", e);
+                panic!("Cannot start without database connection");
+            }
+        };
 
         // Initialize orchestration engine
         let orchestration_engine = OrchestrationEngine::new();
@@ -48,7 +55,7 @@ impl ClaudiaOrchestratorApp {
             agent_manager_view,
             workflow_editor_view,
             orchestration_engine,
-            ipc_client,
+            backend_bridge,
             dark_mode: true,
         }
     }
@@ -93,7 +100,7 @@ impl eframe::App for ClaudiaOrchestratorApp {
                 self.orchestrator_view.show(ctx, &mut self.orchestration_engine);
             }
             AppView::AgentManager => {
-                self.agent_manager_view.show(ctx, &mut self.ipc_client);
+                self.agent_manager_view.show(ctx, &self.backend_bridge);
             }
             AppView::WorkflowEditor => {
                 self.workflow_editor_view.show(ctx);

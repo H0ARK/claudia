@@ -1,0 +1,63 @@
+// This patch shows how to integrate FileRouter with the existing protocol.rs
+// Apply this when ready to fully integrate the file routing system
+
+--- a/src/orchestration/protocol.rs
++++ b/src/orchestration/protocol.rs
+@@ -328,16 +328,48 @@
+ 
+ /// Build task context from task information
+ fn build_task_context(task: &Task) -> Result<TaskContext> {
+-    // TODO: Implement parent task lookup and artifact mounting
++    // This would be updated to use FileRouter
++    // Example integration (would need file_router instance passed in):
++    /*
++    fn build_task_context(task: &Task, file_router: &FileRouter, parent_results: Vec<TaskResult>) -> Result<TaskContext> {
++        // Collect parent artifacts
++        let mut parent_tasks = Vec::new();
++        let mut artifact_ids = Vec::new();
++        
++        for parent_result in parent_results {
++            let parent_info = ParentTaskInfo {
++                task_id: parent_result.task_id,
++                name: format!("Task {}", parent_result.task_id),
++                summary: parent_result.summary.clone(),
++                artifacts: parent_result.artifacts.clone(),
++            };
++            
++            // Collect artifact IDs for mounting
++            for artifact in &parent_result.artifacts {
++                if let Ok(id) = file_router.register_artifact(parent_result.task_id, artifact.path.clone()) {
++                    artifact_ids.push(id);
++                }
++            }
++            
++            parent_tasks.push(parent_info);
++        }
++        
++        // Mount artifacts and get mount points
++        let mounts = file_router.mount_artifacts_for_task(task.id, artifact_ids)?;
++        let mcp_config = file_router.create_mcp_config(task.id, mounts)?;
++        
++        // Build mounted paths map
++        let mut mounted_paths = HashMap::new();
++        for (key, value) in mcp_config.environment.iter() {
++            if key.starts_with("MOUNT_") && key.ends_with("_TARGET") {
++                let mount_id = key.strip_prefix("MOUNT_").unwrap().strip_suffix("_TARGET").unwrap();
++                mounted_paths.insert(format!("mount_{}", mount_id), PathBuf::from(value));
++            }
++        }
++    */
++    
+     Ok(TaskContext {
+         orchestration_id: task.orchestration_id,
+-        parent_tasks: Vec::new(),
+-        mounted_paths: HashMap::new(),
+-        environment: HashMap::new(),
+-        constraints: Vec::new(),
++        parent_tasks: Vec::new(), // Would be populated from parent_results
++        mounted_paths: HashMap::new(), // Would be populated from file_router mounts
++        environment: HashMap::new(), // Would include mcp_config.environment
++        constraints: Vec::new(), // Would include sandbox constraints
+         available_tools: vec![
+             "file_read".to_string(),
+             "file_write".to_string(),

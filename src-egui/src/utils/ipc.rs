@@ -72,16 +72,16 @@ impl IpcClient {
     }
 
     // Agent-specific methods
-    pub async fn list_agents(&self) -> Result<Vec<crate::models::Agent>> {
+    pub async fn list_agents(&self) -> Result<Vec<crate::models::TauriAgent>> {
         self.invoke("list_agents", None).await
     }
 
-    pub async fn create_agent(&self, agent: &crate::models::Agent) -> Result<i64> {
+    pub async fn create_agent(&self, agent: &crate::models::TauriAgent) -> Result<i64> {
         self.invoke("create_agent", Some(serde_json::to_value(agent)?))
             .await
     }
 
-    pub async fn update_agent(&self, agent: &crate::models::Agent) -> Result<()> {
+    pub async fn update_agent(&self, agent: &crate::models::TauriAgent) -> Result<()> {
         self.invoke("update_agent", Some(serde_json::to_value(agent)?))
             .await
     }

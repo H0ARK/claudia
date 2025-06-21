@@ -5,6 +5,7 @@ mod commands;
 mod sandbox;
 mod checkpoint;
 mod process;
+mod orchestration;
 
 use tauri::Manager;
 use commands::claude::{
@@ -42,6 +43,16 @@ use commands::mcp::{
     mcp_add, mcp_list, mcp_get, mcp_remove, mcp_add_json, mcp_add_from_claude_desktop,
     mcp_serve, mcp_test_connection, mcp_reset_project_choices, mcp_get_server_status,
     mcp_read_project_config, mcp_save_project_config,
+};
+use commands::orchestration::{
+    init_orchestration_kernel, create_orchestration, add_orchestration_task,
+    get_orchestration_status, schedule_orchestration_tasks, get_ready_tasks,
+    update_task_status, cancel_orchestration, send_agent_message, 
+    get_orchestration_tasks, select_task, OrchestrationState,
+};
+use commands::plugins::{
+    init_plugin_registry, load_plugin, unload_plugin, list_plugins,
+    find_plugin_for_agent_type, execute_plugin_task, scan_plugins, PluginState,
 };
 use std::sync::Mutex;
 use checkpoint::state::CheckpointState;
@@ -89,6 +100,12 @@ fn main() {
             
             // Initialize process registry
             app.manage(ProcessRegistryState::default());
+            
+            // Initialize orchestration state
+            app.manage(OrchestrationState::default());
+            
+            // Initialize plugin state
+            app.manage(PluginState::default());
             
             Ok(())
         })
@@ -178,7 +195,25 @@ fn main() {
             mcp_reset_project_choices,
             mcp_get_server_status,
             mcp_read_project_config,
-            mcp_save_project_config
+            mcp_save_project_config,
+            init_orchestration_kernel,
+            create_orchestration,
+            add_orchestration_task,
+            get_orchestration_status,
+            schedule_orchestration_tasks,
+            get_ready_tasks,
+            update_task_status,
+            cancel_orchestration,
+            send_agent_message,
+            get_orchestration_tasks,
+            select_task,
+            init_plugin_registry,
+            load_plugin,
+            unload_plugin,
+            list_plugins,
+            find_plugin_for_agent_type,
+            execute_plugin_task,
+            scan_plugins
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -111,7 +111,7 @@ impl eframe::App for ClaudiaOrchestratorApp {
                 self.worker_manager_view.show(ctx);
             }
             AppView::WorkflowEditor => {
-                self.workflow_editor_view.show(ctx);
+                self.workflow_editor_view.show(ctx, &self.backend_bridge);
             }
             AppView::Metrics => {
                 egui::CentralPanel::default().show(ctx, |ui| {

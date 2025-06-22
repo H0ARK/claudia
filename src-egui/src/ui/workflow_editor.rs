@@ -124,45 +124,131 @@ impl WorkflowEditorView {
         }
     }
 
-    fn show_node_palette(&self, ui: &mut egui::Ui) {
+    fn show_node_palette(&mut self, ui: &mut egui::Ui) {
         ui.heading("Node Types");
         ui.separator();
         
-        ui.label("Drag to canvas:");
+        ui.label("Click to add:");
         ui.add_space(10.0);
         
         // Task node
-        let task_response = ui.add(
+        if ui.add(
             egui::Button::new("📋 Task")
                 .min_size(Vec2::new(150.0, 40.0))
-        );
-        if task_response.drag_started() {
-            // TODO: Start dragging new task node
+        ).clicked() {
+            let task = WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "New Task".to_string(),
+                description: "Task description".to_string(),
+                agent_role: AgentRole::Assistant,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Exponential {
+                        initial_delay_ms: 1000,
+                        multiplier: 2.0,
+                    },
+                },
+            };
+            let center = self.canvas_offset + Vec2::new(400.0, 300.0);
+            self.add_new_node(WorkflowNodeType::Task(task), center.to_pos2());
         }
         
         // Parallel node
-        let _parallel_response = ui.add(
+        if ui.add(
             egui::Button::new("⚡ Parallel")
                 .min_size(Vec2::new(150.0, 40.0))
-        );
+        ).clicked() {
+            let center = self.canvas_offset + Vec2::new(400.0, 300.0);
+            self.add_new_node(WorkflowNodeType::Parallel(vec![]), center.to_pos2());
+        }
         
         // Conditional node
-        let _conditional_response = ui.add(
+        if ui.add(
             egui::Button::new("❓ Conditional")
                 .min_size(Vec2::new(150.0, 40.0))
-        );
+        ).clicked() {
+            let center = self.canvas_offset + Vec2::new(400.0, 300.0);
+            let true_branch = Box::new(WorkflowNode {
+                id: Uuid::new_v4(),
+                name: "True Branch".to_string(),
+                node_type: WorkflowNodeType::Task(WorkflowTask {
+                    id: Uuid::new_v4(),
+                    name: "True Task".to_string(),
+                    description: "Execute when condition is true".to_string(),
+                    agent_role: AgentRole::Assistant,
+                    assigned_agent: None,
+                    inputs: vec![],
+                    outputs: vec![],
+                    timeout: None,
+                    retry_policy: RetryPolicy {
+                        max_attempts: 3,
+                        backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                    },
+                }),
+                position: (0.0, 0.0),
+            });
+            self.add_new_node(
+                WorkflowNodeType::Conditional {
+                    condition: "condition".to_string(),
+                    true_branch,
+                    false_branch: None,
+                },
+                center.to_pos2()
+            );
+        }
         
         // Loop node
-        let _loop_response = ui.add(
+        if ui.add(
             egui::Button::new("🔄 Loop")
                 .min_size(Vec2::new(150.0, 40.0))
-        );
+        ).clicked() {
+            let center = self.canvas_offset + Vec2::new(400.0, 300.0);
+            let body = Box::new(WorkflowNode {
+                id: Uuid::new_v4(),
+                name: "Loop Body".to_string(),
+                node_type: WorkflowNodeType::Task(WorkflowTask {
+                    id: Uuid::new_v4(),
+                    name: "Loop Task".to_string(),
+                    description: "Execute in loop".to_string(),
+                    agent_role: AgentRole::Assistant,
+                    assigned_agent: None,
+                    inputs: vec![],
+                    outputs: vec![],
+                    timeout: None,
+                    retry_policy: RetryPolicy {
+                        max_attempts: 3,
+                        backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                    },
+                }),
+                position: (0.0, 0.0),
+            });
+            self.add_new_node(
+                WorkflowNodeType::Loop {
+                    condition: "i < 10".to_string(),
+                    body,
+                    max_iterations: Some(100),
+                },
+                center.to_pos2()
+            );
+        }
         
         // Wait node
-        let _wait_response = ui.add(
+        if ui.add(
             egui::Button::new("⏱ Wait")
                 .min_size(Vec2::new(150.0, 40.0))
-        );
+        ).clicked() {
+            let center = self.canvas_offset + Vec2::new(400.0, 300.0);
+            self.add_new_node(
+                WorkflowNodeType::Wait {
+                    duration: chrono::Duration::seconds(5),
+                },
+                center.to_pos2()
+            );
+        }
         
         ui.add_space(20.0);
         ui.separator();
@@ -172,15 +258,15 @@ impl WorkflowEditorView {
         ui.add_space(10.0);
         
         if ui.button("Web App Development").clicked() {
-            // TODO: Load template
+            self.load_template_web_dev();
         }
         
         if ui.button("Code Review Pipeline").clicked() {
-            // TODO: Load template
+            self.load_template_code_review();
         }
         
         if ui.button("Data Processing").clicked() {
-            // TODO: Load template
+            self.load_template_data_processing();
         }
     }
 
@@ -436,90 +522,466 @@ impl WorkflowEditorView {
     }
 
     fn draw_nodes(&mut self, ui: &mut egui::Ui) {
-        if let Some(workflow) = &self.workflow {
+        if let Some(workflow) = &mut self.workflow {
             let nodes = workflow.graph.nodes.clone();
-            for node in &nodes {
-            let pos = self.node_positions.get(&node.id)
-                .copied()
-                .unwrap_or(Pos2::new(node.position.0, node.position.1));
-            
-            let screen_pos = pos * self.zoom + self.canvas_offset;
-            let node_size = Vec2::new(150.0, 80.0) * self.zoom;
-            let node_rect = Rect::from_min_size(screen_pos, node_size);
-            
-            // Node background
-            let is_selected = self.selected_node == Some(node.id);
-            let fill_color = if is_selected {
-                ui.style().visuals.selection.bg_fill
-            } else {
-                match &node.node_type {
-                    WorkflowNodeType::Start => Color32::from_rgb(50, 150, 50),
-                    WorkflowNodeType::End => Color32::from_rgb(150, 50, 50),
-                    WorkflowNodeType::Task(_) => Color32::from_rgb(50, 50, 150),
-                    WorkflowNodeType::Parallel(_) => Color32::from_rgb(150, 150, 50),
-                    WorkflowNodeType::Conditional { .. } => Color32::from_rgb(150, 50, 150),
-                    WorkflowNodeType::Loop { .. } => Color32::from_rgb(50, 150, 150),
-                    WorkflowNodeType::Wait { .. } => Color32::from_rgb(100, 100, 100),
+            for (node_idx, node) in nodes.iter().enumerate() {
+                let pos = self.node_positions.get(&node.id)
+                    .copied()
+                    .unwrap_or(Pos2::new(node.position.0, node.position.1));
+                
+                let screen_pos = pos * self.zoom + self.canvas_offset;
+                let node_size = Vec2::new(150.0, 80.0) * self.zoom;
+                let node_rect = Rect::from_min_size(screen_pos, node_size);
+                
+                // Node background
+                let is_selected = self.selected_node == Some(node.id);
+                let fill_color = if is_selected {
+                    ui.style().visuals.selection.bg_fill
+                } else {
+                    match &node.node_type {
+                        WorkflowNodeType::Start => Color32::from_rgb(50, 150, 50),
+                        WorkflowNodeType::End => Color32::from_rgb(150, 50, 50),
+                        WorkflowNodeType::Task(_) => Color32::from_rgb(50, 50, 150),
+                        WorkflowNodeType::Parallel(_) => Color32::from_rgb(150, 150, 50),
+                        WorkflowNodeType::Conditional { .. } => Color32::from_rgb(150, 50, 150),
+                        WorkflowNodeType::Loop { .. } => Color32::from_rgb(50, 150, 150),
+                        WorkflowNodeType::Wait { .. } => Color32::from_rgb(100, 100, 100),
+                    }
+                };
+                
+                ui.painter().rect(
+                    node_rect,
+                    5.0,
+                    fill_color,
+                    Stroke::new(2.0, Color32::WHITE),
+                );
+                
+                // Draw input port
+                if !matches!(node.node_type, WorkflowNodeType::Start) {
+                    let input_pos = screen_pos + Vec2::new(0.0, node_size.y / 2.0);
+                    let input_rect = Rect::from_center_size(input_pos, Vec2::splat(10.0 * self.zoom));
+                    
+                    let is_hovering = self.hovering_input == Some((node.id, 0));
+                    let input_color = if is_hovering {
+                        Color32::from_rgb(255, 200, 100)
+                    } else {
+                        Color32::from_rgb(100, 150, 255)
+                    };
+                    
+                    ui.painter().circle_filled(input_pos, 5.0 * self.zoom, input_color);
+                    
+                    let input_response = ui.interact(input_rect, ui.id().with(("input", node.id)), egui::Sense::hover());
+                    if input_response.hovered() {
+                        self.hovering_input = Some((node.id, 0));
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                        
+                        // Handle connection completion
+                        if ui.input(|i| i.pointer.primary_released()) {
+                            if let Some((from_node_id, _)) = self.connection_start {
+                                // Add edge to workflow
+                                if let Some((from_idx, _)) = workflow.graph.nodes.iter().enumerate().find(|(_, n)| n.id == from_node_id) {
+                                    workflow.graph.add_edge(
+                                        petgraph::graph::NodeIndex::new(from_idx),
+                                        petgraph::graph::NodeIndex::new(node_idx),
+                                        WorkflowEdge {
+                                            condition: None,
+                                            priority: 0,
+                                        },
+                                    );
+                                }
+                                self.connection_start = None;
+                            }
+                        }
+                    } else if self.hovering_input == Some((node.id, 0)) {
+                        self.hovering_input = None;
+                    }
                 }
-            };
-            
-            ui.painter().rect(
-                node_rect,
-                5.0,
-                fill_color,
-                Stroke::new(2.0, Color32::WHITE),
-            );
-            
-            // Node icon and text
-            let icon = match &node.node_type {
-                WorkflowNodeType::Start => "▶",
-                WorkflowNodeType::End => "■",
-                WorkflowNodeType::Task(_) => "📋",
-                WorkflowNodeType::Parallel(_) => "⚡",
-                WorkflowNodeType::Conditional { .. } => "❓",
-                WorkflowNodeType::Loop { .. } => "🔄",
-                WorkflowNodeType::Wait { .. } => "⏱",
-            };
-            
-            ui.painter().text(
-                node_rect.center() - Vec2::new(0.0, 10.0 * self.zoom),
-                egui::Align2::CENTER_CENTER,
-                icon,
-                egui::FontId::proportional(20.0 * self.zoom),
-                Color32::WHITE,
-            );
-            
-            ui.painter().text(
-                node_rect.center() + Vec2::new(0.0, 15.0 * self.zoom),
-                egui::Align2::CENTER_CENTER,
-                &node.name,
-                egui::FontId::proportional(12.0 * self.zoom),
-                Color32::WHITE,
-            );
-            
-            // Handle interactions
-            let response = ui.interact(node_rect, ui.id().with(node.id), egui::Sense::click_and_drag());
-            
-            if response.clicked() {
-                self.selected_node = Some(node.id);
-            }
-            
-            if response.drag_started() {
-                self.dragging_node = Some(node.id);
-                self.drag_offset = screen_pos - response.interact_pointer_pos().unwrap_or(screen_pos);
-            }
-            
-            if response.dragged() && self.dragging_node == Some(node.id) {
-                if let Some(pointer_pos) = response.interact_pointer_pos() {
-                    let new_pos = (pointer_pos + self.drag_offset - self.canvas_offset) / self.zoom;
-                    self.node_positions.insert(node.id, new_pos);
+                
+                // Draw output port
+                if !matches!(node.node_type, WorkflowNodeType::End) {
+                    let output_pos = screen_pos + Vec2::new(node_size.x, node_size.y / 2.0);
+                    let output_rect = Rect::from_center_size(output_pos, Vec2::splat(10.0 * self.zoom));
+                    
+                    ui.painter().circle_filled(output_pos, 5.0 * self.zoom, Color32::from_rgb(100, 150, 255));
+                    
+                    let output_response = ui.interact(output_rect, ui.id().with(("output", node.id)), egui::Sense::drag());
+                    if output_response.drag_started() {
+                        self.connection_start = Some((node.id, 0));
+                    }
+                    
+                    if output_response.hovered() {
+                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                }
+                
+                // Node icon and text
+                let icon = match &node.node_type {
+                    WorkflowNodeType::Start => "▶",
+                    WorkflowNodeType::End => "■",
+                    WorkflowNodeType::Task(_) => "📋",
+                    WorkflowNodeType::Parallel(_) => "⚡",
+                    WorkflowNodeType::Conditional { .. } => "❓",
+                    WorkflowNodeType::Loop { .. } => "🔄",
+                    WorkflowNodeType::Wait { .. } => "⏱",
+                };
+                
+                ui.painter().text(
+                    node_rect.center() - Vec2::new(0.0, 10.0 * self.zoom),
+                    egui::Align2::CENTER_CENTER,
+                    icon,
+                    egui::FontId::proportional(20.0 * self.zoom),
+                    Color32::WHITE,
+                );
+                
+                ui.painter().text(
+                    node_rect.center() + Vec2::new(0.0, 15.0 * self.zoom),
+                    egui::Align2::CENTER_CENTER,
+                    &node.name,
+                    egui::FontId::proportional(12.0 * self.zoom),
+                    Color32::WHITE,
+                );
+                
+                // Handle node interactions
+                let response = ui.interact(node_rect, ui.id().with(node.id), egui::Sense::click_and_drag());
+                
+                if response.clicked() {
+                    self.selected_node = Some(node.id);
+                }
+                
+                if response.drag_started() && self.connection_start.is_none() {
+                    self.dragging_node = Some(node.id);
+                    self.drag_offset = screen_pos - response.interact_pointer_pos().unwrap_or(screen_pos);
+                }
+                
+                if response.dragged() && self.dragging_node == Some(node.id) {
+                    if let Some(pointer_pos) = response.interact_pointer_pos() {
+                        let new_pos = (pointer_pos + self.drag_offset - self.canvas_offset) / self.zoom;
+                        self.node_positions.insert(node.id, new_pos);
+                        
+                        // Update position in workflow
+                        if let Some(workflow_node) = workflow.graph.nodes.iter_mut().find(|n| n.id == node.id) {
+                            workflow_node.position = (new_pos.x, new_pos.y);
+                        }
+                    }
+                }
+                
+                if response.drag_stopped() {
+                    self.dragging_node = None;
                 }
             }
             
-            if response.drag_stopped() {
-                self.dragging_node = None;
-            }
+            // Cancel connection on right click or escape
+            if ui.input(|i| i.pointer.secondary_clicked() || i.key_pressed(egui::Key::Escape)) {
+                self.connection_start = None;
             }
         }
+    }
+    
+    fn save_workflow(&mut self, backend_bridge: &Arc<BackendBridge>) {
+        if let Some(workflow) = &self.workflow {
+            // Update node positions before saving
+            for node in &workflow.graph.nodes {
+                if let Some(pos) = self.node_positions.get(&node.id) {
+                    // Position is already updated in drag handler
+                }
+            }
+            
+            // Serialize workflow to JSON
+            let nodes_json = serde_json::to_string(&workflow.graph.nodes).unwrap_or_default();
+            let edges_json = serde_json::to_string(&workflow.graph.edges).unwrap_or_default();
+            
+            let result = if let Some(id) = self.workflow_id {
+                // Update existing workflow
+                backend_bridge.update_workflow(
+                    id,
+                    &workflow.name,
+                    &workflow.description,
+                    &nodes_json,
+                    &edges_json,
+                )
+            } else {
+                // Save new workflow
+                backend_bridge.save_workflow(
+                    &workflow.name,
+                    &workflow.description,
+                    &nodes_json,
+                    &edges_json,
+                ).map(|id| {
+                    self.workflow_id = Some(id);
+                })
+            };
+            
+            if let Err(e) = result {
+                eprintln!("Failed to save workflow: {:?}", e);
+            }
+        }
+    }
+    
+    fn load_workflow(&mut self, backend_bridge: &Arc<BackendBridge>, workflow_id: i64) {
+        match backend_bridge.get_workflow(workflow_id) {
+            Ok((name, description, nodes_json, edges_json)) => {
+                // Deserialize nodes and edges
+                if let (Ok(nodes), Ok(edges)) = (
+                    serde_json::from_str::<Vec<WorkflowNode>>(&nodes_json),
+                    serde_json::from_str::<Vec<(usize, usize, WorkflowEdge)>>(&edges_json),
+                ) {
+                    let mut workflow = Workflow::new(name, description);
+                    workflow.graph.nodes = nodes;
+                    workflow.graph.edges = edges;
+                    workflow.graph.rebuild_graph();
+                    
+                    // Update node positions
+                    self.node_positions.clear();
+                    for node in &workflow.graph.nodes {
+                        self.node_positions.insert(node.id, Pos2::new(node.position.0, node.position.1));
+                    }
+                    
+                    self.workflow = Some(workflow);
+                    self.workflow_id = Some(workflow_id);
+                    self.selected_node = None;
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to load workflow: {:?}", e);
+            }
+        }
+        
+        self.show_load_dialog = false;
+    }
+    
+    fn show_load_workflow_dialog(&mut self, ctx: &Context, backend_bridge: &Arc<BackendBridge>) {
+        egui::Window::new("Load Workflow")
+            .collapsible(false)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("Available Workflows");
+                ui.separator();
+                
+                egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                    for (id, name, description) in &self.available_workflows.clone() {
+                        let id = *id;
+                        ui.group(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(name).strong());
+                                if ui.button("Load").clicked() {
+                                    self.load_workflow(backend_bridge, id);
+                                }
+                                if ui.button("Delete").clicked() {
+                                    if let Err(e) = backend_bridge.delete_workflow(id) {
+                                        eprintln!("Failed to delete workflow: {:?}", e);
+                                    } else {
+                                        // Refresh list
+                                        if let Ok(workflows) = backend_bridge.list_workflows() {
+                                            self.available_workflows = workflows;
+                                        }
+                                    }
+                                }
+                            });
+                            if !description.is_empty() {
+                                ui.label(description);
+                            }
+                        });
+                    }
+                });
+                
+                ui.separator();
+                
+                if ui.button("Cancel").clicked() {
+                    self.show_load_dialog = false;
+                }
+            });
+    }
+    
+    fn add_new_node(&mut self, node_type: WorkflowNodeType, position: Pos2) {
+        if let Some(workflow) = &mut self.workflow {
+            let node = WorkflowNode {
+                id: Uuid::new_v4(),
+                name: match &node_type {
+                    WorkflowNodeType::Task(_) => "New Task".to_string(),
+                    WorkflowNodeType::Parallel(_) => "Parallel".to_string(),
+                    WorkflowNodeType::Conditional { .. } => "Conditional".to_string(),
+                    WorkflowNodeType::Loop { .. } => "Loop".to_string(),
+                    WorkflowNodeType::Wait { .. } => "Wait".to_string(),
+                    _ => "Node".to_string(),
+                },
+                node_type,
+                position: (position.x, position.y),
+            };
+            
+            self.node_positions.insert(node.id, position);
+            workflow.graph.add_node(node);
+        }
+    }
+    
+    fn load_template_web_dev(&mut self) {
+        let mut workflow = Workflow::new(
+            "Web App Development".to_string(),
+            "Complete web application development workflow".to_string(),
+        );
+        
+        // Clear existing nodes except start/end
+        workflow.graph.nodes.retain(|n| matches!(n.node_type, WorkflowNodeType::Start | WorkflowNodeType::End));
+        workflow.graph.edges.clear();
+        
+        // Add tasks
+        let requirements = WorkflowNode {
+            id: Uuid::new_v4(),
+            name: "Gather Requirements".to_string(),
+            node_type: WorkflowNodeType::Task(WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "Requirements Analysis".to_string(),
+                description: "Analyze project requirements and create specification".to_string(),
+                agent_role: AgentRole::Analyst,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                },
+            }),
+            position: (200.0, 300.0),
+        };
+        
+        let design = WorkflowNode {
+            id: Uuid::new_v4(),
+            name: "Design UI/UX".to_string(),
+            node_type: WorkflowNodeType::Task(WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "UI/UX Design".to_string(),
+                description: "Create wireframes and design mockups".to_string(),
+                agent_role: AgentRole::Designer,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                },
+            }),
+            position: (350.0, 300.0),
+        };
+        
+        let development = WorkflowNode {
+            id: Uuid::new_v4(),
+            name: "Develop Application".to_string(),
+            node_type: WorkflowNodeType::Task(WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "Development".to_string(),
+                description: "Implement the application based on requirements and design".to_string(),
+                agent_role: AgentRole::Developer,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                },
+            }),
+            position: (500.0, 300.0),
+        };
+        
+        // Add nodes
+        workflow.graph.add_node(requirements.clone());
+        workflow.graph.add_node(design.clone());
+        workflow.graph.add_node(development.clone());
+        
+        // Update positions
+        self.node_positions.clear();
+        for node in &workflow.graph.nodes {
+            self.node_positions.insert(node.id, Pos2::new(node.position.0, node.position.1));
+        }
+        
+        self.workflow = Some(workflow);
+        self.workflow_id = None;
+    }
+    
+    fn load_template_code_review(&mut self) {
+        let mut workflow = Workflow::new(
+            "Code Review Pipeline".to_string(),
+            "Automated code review and quality assurance workflow".to_string(),
+        );
+        
+        // Clear existing nodes except start/end
+        workflow.graph.nodes.retain(|n| matches!(n.node_type, WorkflowNodeType::Start | WorkflowNodeType::End));
+        workflow.graph.edges.clear();
+        
+        // Add review task
+        let review = WorkflowNode {
+            id: Uuid::new_v4(),
+            name: "Code Review".to_string(),
+            node_type: WorkflowNodeType::Task(WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "Review Code".to_string(),
+                description: "Perform code review and identify issues".to_string(),
+                agent_role: AgentRole::Reviewer,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                },
+            }),
+            position: (300.0, 300.0),
+        };
+        
+        workflow.graph.add_node(review.clone());
+        
+        // Update positions
+        self.node_positions.clear();
+        for node in &workflow.graph.nodes {
+            self.node_positions.insert(node.id, Pos2::new(node.position.0, node.position.1));
+        }
+        
+        self.workflow = Some(workflow);
+        self.workflow_id = None;
+    }
+    
+    fn load_template_data_processing(&mut self) {
+        let mut workflow = Workflow::new(
+            "Data Processing Pipeline".to_string(),
+            "ETL and data processing workflow".to_string(),
+        );
+        
+        // Clear existing nodes except start/end
+        workflow.graph.nodes.retain(|n| matches!(n.node_type, WorkflowNodeType::Start | WorkflowNodeType::End));
+        workflow.graph.edges.clear();
+        
+        // Add data processing task
+        let process = WorkflowNode {
+            id: Uuid::new_v4(),
+            name: "Process Data".to_string(),
+            node_type: WorkflowNodeType::Task(WorkflowTask {
+                id: Uuid::new_v4(),
+                name: "Data Processing".to_string(),
+                description: "Extract, transform and load data".to_string(),
+                agent_role: AgentRole::DataEngineer,
+                assigned_agent: None,
+                inputs: vec![],
+                outputs: vec![],
+                timeout: None,
+                retry_policy: RetryPolicy {
+                    max_attempts: 3,
+                    backoff_strategy: BackoffStrategy::Fixed { delay_ms: 1000 },
+                },
+            }),
+            position: (400.0, 300.0),
+        };
+        
+        workflow.graph.add_node(process.clone());
+        
+        // Update positions
+        self.node_positions.clear();
+        for node in &workflow.graph.nodes {
+            self.node_positions.insert(node.id, Pos2::new(node.position.0, node.position.1));
+        }
+        
+        self.workflow = Some(workflow);
+        self.workflow_id = None;
     }
 }

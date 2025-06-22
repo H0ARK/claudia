@@ -52,6 +52,10 @@ pub enum AgentRole {
         capabilities: Vec<String>,
         custom_prompt: String,
     },
+    Assistant,
+    Analyst,
+    Designer,
+    DataEngineer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -289,6 +293,22 @@ impl Agent {
                  manage infrastructure, and ensure smooth deployments.".to_string()
             }
             AgentRole::Custom { custom_prompt, .. } => custom_prompt.clone(),
+            AgentRole::Assistant => {
+                "You are a helpful AI assistant. You provide clear, accurate, and helpful responses \
+                 to a wide variety of tasks and questions.".to_string()
+            }
+            AgentRole::Analyst => {
+                "You are a business analyst. You analyze requirements, identify stakeholder needs, \
+                 and help define clear project specifications.".to_string()
+            }
+            AgentRole::Designer => {
+                "You are a UI/UX designer. You create intuitive, user-friendly interfaces and \
+                 design beautiful user experiences.".to_string()
+            }
+            AgentRole::DataEngineer => {
+                "You are a data engineer. You design and implement data pipelines, ETL processes, \
+                 and ensure data quality and availability.".to_string()
+            }
         }
     }
 

@@ -108,7 +108,7 @@ impl eframe::App for ClaudiaOrchestratorApp {
                 self.agent_manager_view.show(ctx, &self.backend_bridge);
             }
             AppView::WorkerManager => {
-                self.worker_manager_view.show(ctx);
+                self.worker_manager_view.show(ctx, &self.backend_bridge);
             }
             AppView::WorkflowEditor => {
                 self.workflow_editor_view.show(ctx, &self.backend_bridge);

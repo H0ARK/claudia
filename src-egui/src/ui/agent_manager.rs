@@ -1,4 +1,5 @@
 use crate::models::TauriAgent;
+use crate::orchestration::{AgentBuilder, GeneratedAgent};
 use crate::utils::BackendBridge;
 use egui::{Color32, Context, RichText};
 use std::sync::Arc;
@@ -8,9 +9,13 @@ pub struct AgentManagerView {
     selected_agent: Option<usize>,
     editing_agent: Option<TauriAgent>,
     show_create_dialog: bool,
+    show_ai_builder_dialog: bool,
     new_agent: TauriAgent,
+    ai_description: String,
+    generated_agent: Option<GeneratedAgent>,
     loading: bool,
     error_message: Option<String>,
+    success_message: Option<String>,
     needs_refresh: bool,
 }
 
@@ -21,9 +26,13 @@ impl AgentManagerView {
             selected_agent: None,
             editing_agent: None,
             show_create_dialog: false,
+            show_ai_builder_dialog: false,
             new_agent: TauriAgent::default(),
+            ai_description: String::new(),
+            generated_agent: None,
             loading: false,
             error_message: None,
+            success_message: None,
             needs_refresh: true,
         }
     }
@@ -42,6 +51,13 @@ impl AgentManagerView {
                     println!("Create Agent button clicked!");
                     self.show_create_dialog = true;
                     self.new_agent = TauriAgent::default();
+                }
+                
+                if ui.button("🤖 AI Builder").clicked() {
+                    println!("AI Builder button clicked!");
+                    self.show_ai_builder_dialog = true;
+                    self.ai_description.clear();
+                    self.generated_agent = None;
                 }
                 
                 if ui.button("🔄 Refresh").clicked() {
@@ -82,6 +98,10 @@ impl AgentManagerView {
                     if let Some(error) = &self.error_message {
                         ui.colored_label(Color32::RED, format!("❌ {}", error));
                     }
+                    
+                    if let Some(success) = &self.success_message {
+                        ui.colored_label(Color32::GREEN, format!("✅ {}", success));
+                    }
                 });
             });
         });
@@ -102,6 +122,10 @@ impl AgentManagerView {
 
         if let Some(_) = &self.editing_agent {
             self.show_edit_agent_dialog(ctx, backend_bridge);
+        }
+        
+        if self.show_ai_builder_dialog {
+            self.show_ai_builder_dialog(ctx, backend_bridge);
         }
     }
 
@@ -405,6 +429,185 @@ impl AgentManagerView {
         
         if should_close {
             self.editing_agent = None;
+        }
+    }
+    
+    fn show_ai_builder_dialog(&mut self, ctx: &Context, backend_bridge: &Arc<BackendBridge>) {
+        egui::Window::new("AI Agent Builder")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(700.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.heading("Create Agent with AI");
+                ui.label("Describe the agent you want to create, and AI will generate it for you.");
+                ui.separator();
+                
+                ui.label("Agent Description:");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.ai_description)
+                        .desired_rows(5)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Example: I need an agent that can review code for security vulnerabilities and suggest improvements...")
+                );
+                
+                ui.add_space(10.0);
+                
+                // Show generated agent if available
+                if let Some(generated) = &self.generated_agent {
+                    ui.separator();
+                    ui.heading("Generated Agent");
+                    
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&generated.agent.icon).size(32.0));
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&generated.agent.name).strong().size(16.0));
+                            ui.label(RichText::new(generated.agent.display_model_name())
+                                .color(ui.style().visuals.weak_text_color())
+                                .size(12.0));
+                        });
+                    });
+                    
+                    ui.add_space(10.0);
+                    
+                    ui.collapsing("System Prompt", |ui| {
+                        ui.label(&generated.agent.system_prompt);
+                    });
+                    
+                    ui.collapsing("Reasoning", |ui| {
+                        ui.label(&generated.reasoning);
+                    });
+                    
+                    ui.collapsing("Suggested Workflows", |ui| {
+                        for workflow in &generated.suggested_workflows {
+                            ui.label(format!("• {}", workflow));
+                        }
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.separator();
+                }
+                
+                ui.add_space(10.0);
+                
+                ui.horizontal(|ui| {
+                    let generate_enabled = !self.ai_description.is_empty() && !self.loading;
+                    ui.add_enabled_ui(generate_enabled, |ui| {
+                        if ui.button("🤖 Generate Agent").clicked() {
+                            self.generate_agent_from_description(backend_bridge);
+                        }
+                    });
+                    
+                    if self.generated_agent.is_some() {
+                        if ui.button("💾 Save Agent").clicked() {
+                            self.save_generated_agent(backend_bridge);
+                        }
+                    }
+                    
+                    if ui.button("Cancel").clicked() {
+                        self.show_ai_builder_dialog = false;
+                        self.ai_description.clear();
+                        self.generated_agent = None;
+                    }
+                });
+                
+                if self.loading {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Generating agent configuration...");
+                    });
+                }
+            });
+    }
+    
+    fn generate_agent_from_description(&mut self, backend_bridge: &Arc<BackendBridge>) {
+        self.loading = true;
+        self.error_message = None;
+        
+        // Create a simple generated agent based on the description
+        // In a real implementation, this would call the AgentBuilder with Claude API
+        let agent_builder = AgentBuilder::new(backend_bridge.clone());
+        
+        // For now, create a mock generated agent
+        // In production, this would be: agent_builder.build_agent_from_description(&self.ai_description).await
+        let generated = self.create_mock_generated_agent(&self.ai_description);
+        
+        self.generated_agent = Some(generated);
+        self.loading = false;
+    }
+    
+    fn create_mock_generated_agent(&self, description: &str) -> GeneratedAgent {
+        // This is a simplified version - in production, the AgentBuilder would use Claude
+        let name = if description.to_lowercase().contains("security") {
+            "Security Analyst"
+        } else if description.to_lowercase().contains("test") {
+            "Test Engineer"
+        } else if description.to_lowercase().contains("data") {
+            "Data Processor"
+        } else {
+            "Custom Agent"
+        }.to_string();
+        
+        let icon = if description.to_lowercase().contains("security") {
+            "🔒"
+        } else if description.to_lowercase().contains("test") {
+            "🧪"
+        } else if description.to_lowercase().contains("data") {
+            "📊"
+        } else {
+            "🤖"
+        }.to_string();
+        
+        let agent = TauriAgent {
+            id: None,
+            name: name.clone(),
+            icon,
+            system_prompt: format!(
+                "You are {}, an AI agent specialized based on the following requirements:\n\n{}\n\nProvide expert assistance in your domain while maintaining high quality standards.",
+                name,
+                description
+            ),
+            default_task: Some(format!("Execute {} tasks", name.to_lowercase())),
+            model: "claude-3-sonnet-20240229".to_string(),
+            sandbox_enabled: false,
+            enable_file_read: true,
+            enable_file_write: description.to_lowercase().contains("generate") || description.to_lowercase().contains("create"),
+            enable_network: description.to_lowercase().contains("api") || description.to_lowercase().contains("deploy"),
+            enable_system_commands: description.to_lowercase().contains("build") || description.to_lowercase().contains("test"),
+            custom_instructions: Some(format!("Specialized for: {}", description)),
+            sandbox_profile_id: None,
+            created_at: None,
+            updated_at: None,
+        };
+        
+        GeneratedAgent {
+            agent,
+            reasoning: "Agent configured based on the description provided. Permissions and model selected to match the required capabilities.".to_string(),
+            suggested_workflows: vec![
+                format!("{} Workflow", name),
+                "Automated Pipeline".to_string(),
+            ],
+        }
+    }
+    
+    fn save_generated_agent(&mut self, backend_bridge: &Arc<BackendBridge>) {
+        if let Some(generated) = &self.generated_agent {
+            match backend_bridge.create_agent(&generated.agent) {
+                Ok(_) => {
+                    self.success_message = Some(format!("Agent '{}' created successfully!", generated.agent.name));
+                    self.needs_refresh = true;
+                    self.show_ai_builder_dialog = false;
+                    self.ai_description.clear();
+                    self.generated_agent = None;
+                    
+                    // Clear success message after 3 seconds
+                    // In a real app, you'd use a timer/scheduler for this
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Failed to save agent: {}", e));
+                }
+            }
         }
     }
 }

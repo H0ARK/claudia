@@ -1,9 +1,12 @@
-use crate::models::{Workflow, WorkflowNodeType, WorkflowTask, WorkflowNode, WorkflowEdge, AgentRole, TaskInput, TaskOutput, DataType, DataSource, DataDestination, RetryPolicy, BackoffStrategy};
+use crate::models::{Workflow, WorkflowNodeType, WorkflowTask, WorkflowNode, AgentRole};
+use crate::models::workflow::{WorkflowEdge, TaskInput, TaskOutput, DataType, DataSource, DataDestination, RetryPolicy, BackoffStrategy};
 use crate::utils::BackendBridge;
 use egui::{Color32, Context, Pos2, Rect, RichText, Stroke, Vec2, CursorIcon};
+use egui::epaint::PathStroke;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
+use serde_json;
 
 pub struct WorkflowEditorView {
     workflow: Option<Workflow>,
@@ -16,10 +19,13 @@ pub struct WorkflowEditorView {
     connection_start: Option<(Uuid, usize)>, // (node_id, output_index)
     node_positions: HashMap<Uuid, Pos2>,
     show_load_dialog: bool,
+    show_execute_dialog: bool,
     available_workflows: Vec<(i64, String, String)>,
     new_workflow_name: String,
     new_workflow_description: String,
     hovering_input: Option<(Uuid, usize)>, // (node_id, input_index)
+    execution_name: String,
+    execution_message: Option<String>,
 }
 
 impl WorkflowEditorView {
@@ -35,10 +41,13 @@ impl WorkflowEditorView {
             connection_start: None,
             node_positions: HashMap::new(),
             show_load_dialog: false,
+            show_execute_dialog: false,
             available_workflows: Vec::new(),
             new_workflow_name: String::new(),
             new_workflow_description: String::new(),
             hovering_input: None,
+            execution_name: String::new(),
+            execution_message: None,
         }
     }
 
@@ -57,23 +66,39 @@ impl WorkflowEditorView {
                 
                 ui.separator();
                 
+                if let Some(workflow) = &mut self.workflow {
+                    ui.separator();
+                    ui.label("Workflow:");
+                    ui.text_edit_singleline(&mut workflow.name);
+                    ui.separator();
+                }
+                
                 if self.workflow.is_some() {
                     if ui.button("💾 Save").clicked() {
-                        self.save_workflow(backend_bridge);
+                        match self.save_workflow(backend_bridge) {
+                            Ok(_) => {
+                                // Could show a success message
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to save workflow: {}", e);
+                            }
+                        }
                     }
                     
                     if ui.button("📂 Load").clicked() {
                         self.show_load_dialog = true;
                         // Load available workflows
                         if let Ok(workflows) = backend_bridge.list_workflows() {
-                            self.available_workflows = workflows;
+                            self.available_workflows = workflows.into_iter()
+                                .map(|(id, name, desc, _, _)| (id, name, desc))
+                                .collect();
                         }
                     }
                     
                     ui.separator();
                     
                     if ui.button("▶ Execute").clicked() {
-                        // TODO: Execute workflow
+                        self.show_execute_dialog = true;
                     }
                     
                     if ui.button("✓ Validate").clicked() {
@@ -121,6 +146,11 @@ impl WorkflowEditorView {
         // Load workflow dialog
         if self.show_load_dialog {
             self.show_load_workflow_dialog(ctx, backend_bridge);
+        }
+        
+        // Execute workflow dialog
+        if self.show_execute_dialog {
+            self.show_execute_workflow_dialog(ctx, backend_bridge);
         }
     }
 
@@ -481,7 +511,7 @@ impl WorkflowEditorView {
                     points: [from_right, control1, control2, to_left],
                     closed: false,
                     fill: Color32::TRANSPARENT,
-                    stroke: Stroke::new(2.0 * self.zoom, Color32::from_rgb(100, 150, 255)),
+                    stroke: PathStroke::new(2.0 * self.zoom, Color32::from_rgb(100, 150, 255)),
                 }));
                 
                 // Draw arrow
@@ -677,11 +707,11 @@ impl WorkflowEditorView {
         }
     }
     
-    fn save_workflow(&mut self, backend_bridge: &Arc<BackendBridge>) {
+    fn save_workflow(&mut self, backend_bridge: &Arc<BackendBridge>) -> Result<i64, String> {
         if let Some(workflow) = &self.workflow {
             // Update node positions before saving
             for node in &workflow.graph.nodes {
-                if let Some(pos) = self.node_positions.get(&node.id) {
+                if let Some(_pos) = self.node_positions.get(&node.id) {
                     // Position is already updated in drag handler
                 }
             }
@@ -690,7 +720,7 @@ impl WorkflowEditorView {
             let nodes_json = serde_json::to_string(&workflow.graph.nodes).unwrap_or_default();
             let edges_json = serde_json::to_string(&workflow.graph.edges).unwrap_or_default();
             
-            let result = if let Some(id) = self.workflow_id {
+            if let Some(id) = self.workflow_id {
                 // Update existing workflow
                 backend_bridge.update_workflow(
                     id,
@@ -698,22 +728,22 @@ impl WorkflowEditorView {
                     &workflow.description,
                     &nodes_json,
                     &edges_json,
-                )
+                ).map_err(|e| format!("Failed to update workflow: {:?}", e))?;
+                Ok(id)
             } else {
                 // Save new workflow
-                backend_bridge.save_workflow(
+                let new_id = backend_bridge.save_workflow(
                     &workflow.name,
                     &workflow.description,
                     &nodes_json,
                     &edges_json,
-                ).map(|id| {
-                    self.workflow_id = Some(id);
-                })
-            };
-            
-            if let Err(e) = result {
-                eprintln!("Failed to save workflow: {:?}", e);
+                ).map_err(|e| format!("Failed to save workflow: {:?}", e))?;
+                
+                self.workflow_id = Some(new_id);
+                Ok(new_id)
             }
+        } else {
+            Err("No workflow to save".to_string())
         }
     }
     
@@ -772,7 +802,9 @@ impl WorkflowEditorView {
                                     } else {
                                         // Refresh list
                                         if let Ok(workflows) = backend_bridge.list_workflows() {
-                                            self.available_workflows = workflows;
+                                            self.available_workflows = workflows.into_iter()
+                                                .map(|(id, name, desc, _, _)| (id, name, desc))
+                                                .collect();
                                         }
                                     }
                                 }
@@ -871,7 +903,7 @@ impl WorkflowEditorView {
                 id: Uuid::new_v4(),
                 name: "Development".to_string(),
                 description: "Implement the application based on requirements and design".to_string(),
-                agent_role: AgentRole::Developer,
+                agent_role: AgentRole::Assistant,
                 assigned_agent: None,
                 inputs: vec![],
                 outputs: vec![],
@@ -917,7 +949,7 @@ impl WorkflowEditorView {
                 id: Uuid::new_v4(),
                 name: "Review Code".to_string(),
                 description: "Perform code review and identify issues".to_string(),
-                agent_role: AgentRole::Reviewer,
+                agent_role: AgentRole::Assistant,
                 assigned_agent: None,
                 inputs: vec![],
                 outputs: vec![],
@@ -983,5 +1015,107 @@ impl WorkflowEditorView {
         
         self.workflow = Some(workflow);
         self.workflow_id = None;
+    }
+    
+    fn show_execute_workflow_dialog(&mut self, ctx: &Context, backend_bridge: &Arc<BackendBridge>) {
+        egui::Window::new("Execute Workflow")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.heading("Execute Workflow");
+                ui.separator();
+                
+                if let Some(workflow) = &self.workflow {
+                    ui.label(format!("Workflow: {}", workflow.name));
+                    ui.label(format!("Description: {}", workflow.description));
+                    ui.add_space(10.0);
+                    
+                    ui.label("Orchestration Name:");
+                    ui.text_edit_singleline(&mut self.execution_name);
+                    
+                    if self.execution_name.is_empty() {
+                        self.execution_name = format!("{} - Run", workflow.name);
+                    }
+                    
+                    ui.add_space(20.0);
+                    
+                    // Show task count
+                    let task_count = workflow.graph.nodes.iter()
+                        .filter(|n| matches!(n.node_type, WorkflowNodeType::Task(_)))
+                        .count();
+                    ui.label(format!("This workflow contains {} task(s)", task_count));
+                    
+                    ui.add_space(10.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+                    
+                    ui.horizontal(|ui| {
+                        if ui.button("▶ Execute").clicked() {
+                            self.execute_workflow(backend_bridge);
+                        }
+                        
+                        if ui.button("Cancel").clicked() {
+                            self.show_execute_dialog = false;
+                            self.execution_name.clear();
+                            self.execution_message = None;
+                        }
+                    });
+                    
+                    if let Some(message) = &self.execution_message {
+                        ui.add_space(10.0);
+                        ui.colored_label(Color32::GREEN, message);
+                    }
+                } else {
+                    ui.label("No workflow loaded to execute");
+                    
+                    if ui.button("Close").clicked() {
+                        self.show_execute_dialog = false;
+                    }
+                }
+            });
+    }
+    
+    fn execute_workflow(&mut self, backend_bridge: &Arc<BackendBridge>) {
+        if let Some(workflow) = &self.workflow {
+            // First save the workflow if it hasn't been saved
+            let workflow_id = if let Some(id) = self.workflow_id {
+                id
+            } else {
+                // Save the workflow first
+                match self.save_workflow(backend_bridge) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.execution_message = Some(format!("Failed to save workflow: {}", e));
+                        return;
+                    }
+                }
+            };
+            
+            // Create an orchestration
+            match backend_bridge.create_orchestration(&self.execution_name, Some(workflow_id)) {
+                Ok(orchestration_id) => {
+                    // Start the orchestration
+                    match backend_bridge.start_orchestration(orchestration_id) {
+                        Ok(_) => {
+                            self.execution_message = Some(format!(
+                                "Orchestration '{}' started successfully! ID: {}",
+                                self.execution_name,
+                                orchestration_id
+                            ));
+                            
+                            // Close dialog after a moment
+                            // In a real app, you'd navigate to the orchestration view
+                        }
+                        Err(e) => {
+                            self.execution_message = Some(format!("Failed to start orchestration: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.execution_message = Some(format!("Failed to create orchestration: {}", e));
+                }
+            }
+        }
     }
 }

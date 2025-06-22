@@ -1,128 +1,93 @@
-use egui::{Color32, Context, RichText, Ui};
-// Removed unused import
-use chrono::{DateTime, Utc};
-
-/// Represents a worker in the UI
-#[derive(Debug, Clone)]
-pub struct WorkerInfo {
-    pub id: String,
-    pub worker_type: String,
-    pub task_id: i64,
-    pub status: String,
-    pub started_at: DateTime<Utc>,
-    pub metrics: WorkerMetrics,
-}
-
-/// Worker metrics for display
-#[derive(Debug, Clone, Default)]
-pub struct WorkerMetrics {
-    pub messages_sent: u64,
-    pub messages_received: u64,
-    pub tasks_completed: u64,
-    pub tasks_failed: u64,
-    pub total_runtime_seconds: u64,
-    pub error_count: u64,
-}
-
-/// Configuration for spawning a new worker
-#[derive(Debug, Clone)]
-pub struct WorkerSpawnConfig {
-    pub worker_type: String,
-    pub task_name: String,
-    pub task_description: String,
-    pub task_goal: String,
-    pub model: Option<String>,
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-    pub custom_system_prompt: Option<String>,
-    pub sandbox_profile: Option<String>,
-}
-
-impl Default for WorkerSpawnConfig {
-    fn default() -> Self {
-        Self {
-            worker_type: "developer".to_string(),
-            task_name: "New Task".to_string(),
-            task_description: String::new(),
-            task_goal: String::new(),
-            model: None,
-            temperature: Some(0.7),
-            max_tokens: Some(4096),
-            custom_system_prompt: None,
-            sandbox_profile: None,
-        }
-    }
-}
+use crate::models::TauriAgent;
+use crate::utils::BackendBridge;
+use egui::{Color32, Context, RichText};
+use std::collections::HashMap;
+use std::process::{Child, Command};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub struct WorkerManagerView {
-    workers: Vec<WorkerInfo>,
-    selected_worker: Option<usize>,
+    workers: HashMap<u64, WorkerInfo>,
+    selected_worker: Option<u64>,
+    available_agents: Vec<TauriAgent>,
     show_spawn_dialog: bool,
-    spawn_config: WorkerSpawnConfig,
-    global_metrics: WorkerMetrics,
-    message_input: String,
-    loading: bool,
+    selected_agent_id: Option<i64>,
+    worker_args: String,
     error_message: Option<String>,
-    needs_refresh: bool,
+    backend_bridge: Option<Arc<BackendBridge>>,
+    next_worker_id: u64,
+}
+
+struct WorkerInfo {
+    id: u64,
+    agent_name: String,
+    agent_id: i64,
+    process: Arc<Mutex<Child>>,
+    status: WorkerStatus,
+    started_at: Instant,
+    last_heartbeat: Instant,
+    logs: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum WorkerStatus {
+    Running,
+    Stopped,
+    Crashed,
+    Unknown,
 }
 
 impl WorkerManagerView {
     pub fn new() -> Self {
         Self {
-            workers: Vec::new(),
+            workers: HashMap::new(),
             selected_worker: None,
+            available_agents: Vec::new(),
             show_spawn_dialog: false,
-            spawn_config: WorkerSpawnConfig::default(),
-            global_metrics: WorkerMetrics::default(),
-            message_input: String::new(),
-            loading: false,
+            selected_agent_id: None,
+            worker_args: String::new(),
             error_message: None,
-            needs_refresh: true,
+            backend_bridge: None,
+            next_worker_id: 1,
         }
     }
 
-    pub fn show(&mut self, ctx: &Context) {
-        // Note: In a real implementation, this would integrate with the Tauri backend
-        // For now, we'll show a mock UI that demonstrates the worker management interface
-        
+    pub fn show(&mut self, ctx: &Context, backend_bridge: &Arc<BackendBridge>) {
+        // Store backend bridge reference
+        if self.backend_bridge.is_none() {
+            self.backend_bridge = Some(backend_bridge.clone());
+            self.load_available_agents(backend_bridge);
+        }
+
         // Top toolbar
         egui::TopBottomPanel::top("worker_toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("🚀 Spawn Worker").clicked() {
                     self.show_spawn_dialog = true;
-                    self.spawn_config = WorkerSpawnConfig::default();
                 }
                 
                 if ui.button("🔄 Refresh").clicked() {
-                    self.needs_refresh = true;
-                    // TODO: Call refresh_workers()
+                    self.refresh_worker_status();
                 }
                 
-                if self.selected_worker.is_some() {
+                if let Some(worker_id) = self.selected_worker {
                     ui.separator();
                     
-                    if ui.button("🛑 Terminate").clicked() {
-                        if let Some(idx) = self.selected_worker {
-                            let worker_id = self.workers[idx].id.clone();
-                            // TODO: Call terminate_worker(worker_id)
-                        }
+                    if ui.button("⏹️ Stop").clicked() {
+                        self.stop_worker(worker_id);
                     }
                     
-                    if ui.button("📊 Metrics").clicked() {
-                        // TODO: Show detailed metrics dialog
+                    if ui.button("🔄 Restart").clicked() {
+                        self.restart_worker(worker_id);
+                    }
+                    
+                    if ui.button("📝 View Logs").clicked() {
+                        // TODO: Show logs window
                     }
                 }
                 
-                // Show global metrics
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(format!("Active Workers: {}", self.workers.len()));
-                    ui.separator();
-                    ui.label(format!("Total Tasks: {}", self.global_metrics.tasks_completed + self.global_metrics.tasks_failed));
-                    
-                    if self.loading {
-                        ui.spinner();
-                        ui.label("Loading...");
-                    }
                     
                     if let Some(error) = &self.error_message {
                         ui.colored_label(Color32::RED, format!("❌ {}", error));
@@ -131,12 +96,18 @@ impl WorkerManagerView {
             });
         });
 
-        // Main content area
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.workers.is_empty() && !self.loading {
-                self.show_empty_state(ui);
-            } else {
+        // Main content - split view
+        egui::SidePanel::left("worker_list")
+            .default_width(300.0)
+            .show(ctx, |ui| {
                 self.show_worker_list(ui);
+            });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(worker_id) = self.selected_worker {
+                self.show_worker_details(ui, worker_id);
+            } else {
+                self.show_empty_state(ui);
             }
         });
 
@@ -146,270 +117,265 @@ impl WorkerManagerView {
         }
     }
 
-    fn show_empty_state(&mut self, ui: &mut Ui) {
+    fn load_available_agents(&mut self, backend_bridge: &Arc<BackendBridge>) {
+        match backend_bridge.list_agents() {
+            Ok(agents) => {
+                self.available_agents = agents;
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to load agents: {}", e));
+            }
+        }
+    }
+
+    fn show_worker_list(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Workers");
+        ui.separator();
+        
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let worker_ids: Vec<u64> = self.workers.keys().copied().collect();
+            
+            for worker_id in worker_ids {
+                if let Some(worker) = self.workers.get(&worker_id) {
+                    let is_selected = self.selected_worker == Some(worker_id);
+                    
+                    let response = ui.add(
+                        egui::SelectableLabel::new(is_selected, format!(
+                            "{} {} - {}",
+                            match worker.status {
+                                WorkerStatus::Running => "🟢",
+                                WorkerStatus::Stopped => "🔴",
+                                WorkerStatus::Crashed => "💥",
+                                WorkerStatus::Unknown => "❓",
+                            },
+                            worker.agent_name,
+                            format!("Worker #{}", worker.id)
+                        ))
+                    );
+                    
+                    if response.clicked() {
+                        self.selected_worker = Some(worker_id);
+                    }
+                }
+            }
+        });
+    }
+
+    fn show_worker_details(&self, ui: &mut egui::Ui, worker_id: u64) {
+        if let Some(worker) = self.workers.get(&worker_id) {
+            ui.heading(format!("Worker #{} - {}", worker.id, worker.agent_name));
+            ui.separator();
+            
+            ui.horizontal(|ui| {
+                ui.label("Status:");
+                let status_color = match worker.status {
+                    WorkerStatus::Running => Color32::GREEN,
+                    WorkerStatus::Stopped => Color32::RED,
+                    WorkerStatus::Crashed => Color32::DARK_RED,
+                    WorkerStatus::Unknown => Color32::GRAY,
+                };
+                ui.colored_label(status_color, format!("{:?}", worker.status));
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("Running for:");
+                let duration = worker.started_at.elapsed();
+                ui.label(format!("{:02}:{:02}:{:02}", 
+                    duration.as_secs() / 3600,
+                    (duration.as_secs() % 3600) / 60,
+                    duration.as_secs() % 60
+                ));
+            });
+            
+            ui.horizontal(|ui| {
+                ui.label("Last heartbeat:");
+                let heartbeat_ago = worker.last_heartbeat.elapsed().as_secs();
+                ui.label(format!("{} seconds ago", heartbeat_ago));
+            });
+            
+            ui.add_space(20.0);
+            ui.separator();
+            ui.add_space(10.0);
+            
+            ui.heading("Logs");
+            
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for log in &worker.logs {
+                        ui.label(log);
+                    }
+                });
+        }
+    }
+
+    fn show_empty_state(&self, ui: &mut egui::Ui) {
         ui.centered_and_justified(|ui| {
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("🚀").size(64.0));
                 ui.add_space(20.0);
-                ui.heading("No Active Workers");
-                ui.label("Spawn your first worker to start distributed task execution.");
-                ui.add_space(20.0);
-                if ui.button("Spawn First Worker").clicked() {
-                    self.show_spawn_dialog = true;
-                    self.spawn_config = WorkerSpawnConfig::default();
-                }
+                ui.heading("No Workers Running");
+                ui.label("Spawn a worker to begin task execution.");
             });
-        });
-    }
-
-    fn show_worker_list(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            // Table header
-            ui.horizontal(|ui| {
-                ui.label("Worker ID");
-                ui.separator();
-                ui.label("Type");
-                ui.separator();
-                ui.label("Status");
-                ui.separator();
-                ui.label("Task ID");
-                ui.separator();
-                ui.label("Started");
-                ui.separator();
-                ui.label("Metrics");
-            });
-            
-            ui.separator();
-            
-            // Worker rows
-            for (idx, worker) in self.workers.iter().enumerate() {
-                let is_selected = self.selected_worker == Some(idx);
-                
-                let response = ui.selectable_label(is_selected, "");
-                
-                ui.horizontal(|ui| {
-                    ui.label(&worker.id);
-                    ui.separator();
-                    ui.label(self.format_worker_type(&worker.worker_type));
-                    ui.separator();
-                    ui.colored_label(
-                        self.status_color(&worker.status),
-                        self.format_status(&worker.status)
-                    );
-                    ui.separator();
-                    ui.label(worker.task_id.to_string());
-                    ui.separator();
-                    ui.label(worker.started_at.format("%H:%M:%S").to_string());
-                    ui.separator();
-                    ui.label(format!(
-                        "Sent: {} | Received: {} | Completed: {} | Failed: {}",
-                        worker.metrics.messages_sent,
-                        worker.metrics.messages_received,
-                        worker.metrics.tasks_completed,
-                        worker.metrics.tasks_failed
-                    ));
-                });
-                
-                if response.clicked() {
-                    self.selected_worker = Some(idx);
-                }
-                
-                ui.separator();
-            }
-        });
-        
-        // Worker details panel
-        if let Some(idx) = self.selected_worker {
-            if idx < self.workers.len() {
-                self.show_worker_details(ui, &self.workers[idx].clone());
-            }
-        }
-    }
-
-    fn show_worker_details(&mut self, ui: &mut Ui, worker: &WorkerInfo) {
-        ui.separator();
-        ui.heading(format!("Worker Details: {}", worker.id));
-        
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(format!("Type: {}", self.format_worker_type(&worker.worker_type)));
-                ui.label(format!("Status: {}", self.format_status(&worker.status)));
-                ui.label(format!("Task ID: {}", worker.task_id));
-                ui.label(format!("Started: {}", worker.started_at.format("%Y-%m-%d %H:%M:%S")));
-                ui.label(format!("Runtime: {}s", worker.metrics.total_runtime_seconds));
-            });
-            
-            ui.separator();
-            
-            ui.vertical(|ui| {
-                ui.label("Metrics:");
-                ui.label(format!("Messages Sent: {}", worker.metrics.messages_sent));
-                ui.label(format!("Messages Received: {}", worker.metrics.messages_received));
-                ui.label(format!("Tasks Completed: {}", worker.metrics.tasks_completed));
-                ui.label(format!("Tasks Failed: {}", worker.metrics.tasks_failed));
-                ui.label(format!("Errors: {}", worker.metrics.error_count));
-            });
-        });
-        
-        ui.separator();
-        
-        // Message input
-        ui.horizontal(|ui| {
-            ui.label("Send Message:");
-            ui.text_edit_singleline(&mut self.message_input);
-            if ui.button("Send").clicked() && !self.message_input.is_empty() {
-                let message = self.message_input.clone();
-                self.message_input.clear();
-                // TODO: Call send_message_to_worker(worker.id, message)
-            }
         });
     }
 
     fn show_spawn_worker_dialog(&mut self, ctx: &Context) {
-        egui::Window::new("Spawn New Worker")
+        egui::Window::new("Spawn Worker")
             .collapsible(false)
-            .resizable(true)
-            .default_width(500.0)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    // Worker type selection
-                    ui.horizontal(|ui| {
-                        ui.label("Worker Type:");
-                        egui::ComboBox::from_label("")
-                            .selected_text(&self.spawn_config.worker_type)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.spawn_config.worker_type, "developer".to_string(), "Developer");
-                                ui.selectable_value(&mut self.spawn_config.worker_type, "tester".to_string(), "Tester");
-                                ui.selectable_value(&mut self.spawn_config.worker_type, "reviewer".to_string(), "Reviewer");
-                                ui.selectable_value(&mut self.spawn_config.worker_type, "documentation".to_string(), "Documentation");
-                            });
-                    });
-                    
-                    // Task details
-                    ui.horizontal(|ui| {
-                        ui.label("Task Name:");
-                        ui.text_edit_singleline(&mut self.spawn_config.task_name);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Description:");
-                        ui.text_edit_multiline(&mut self.spawn_config.task_description);
-                    });
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Goal:");
-                        ui.text_edit_multiline(&mut self.spawn_config.task_goal);
-                    });
-                    
-                    // Model configuration
-                    ui.collapsing("Advanced Configuration", |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Model:");
-                            let model_text = self.spawn_config.model.get_or_insert_with(|| "claude-3-5-sonnet-20241022".to_string());
-                            ui.text_edit_singleline(model_text);
-                        });
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Temperature:");
-                            let mut temp = self.spawn_config.temperature.unwrap_or(0.7);
-                            ui.add(egui::Slider::new(&mut temp, 0.0..=1.0));
-                            self.spawn_config.temperature = Some(temp);
-                        });
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Max Tokens:");
-                            let mut tokens = self.spawn_config.max_tokens.unwrap_or(4096);
-                            ui.add(egui::Slider::new(&mut tokens, 1..=8192));
-                            self.spawn_config.max_tokens = Some(tokens);
-                        });
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Custom System Prompt:");
-                            let prompt_text = self.spawn_config.custom_system_prompt.get_or_insert_with(String::new);
-                            ui.text_edit_multiline(prompt_text);
-                        });
-                        
-                        ui.horizontal(|ui| {
-                            ui.label("Sandbox Profile:");
-                            let profile_text = self.spawn_config.sandbox_profile.get_or_insert_with(String::new);
-                            ui.text_edit_singleline(profile_text);
-                        });
-                    });
-                    
-                    ui.separator();
-                    
-                    // Buttons
-                    ui.horizontal(|ui| {
-                        if ui.button("Spawn Worker").clicked() {
-                            // TODO: Call spawn_worker with config
-                            // For now, just close the dialog
-                            self.show_spawn_dialog = false;
-                        }
-                        
-                        if ui.button("Cancel").clicked() {
-                            self.show_spawn_dialog = false;
+                ui.heading("Select Agent");
+                ui.separator();
+                
+                egui::ComboBox::from_label("Agent")
+                    .selected_text(
+                        self.selected_agent_id
+                            .and_then(|id| self.available_agents.iter().find(|a| a.id == Some(id)))
+                            .map(|a| a.name.clone())
+                            .unwrap_or_else(|| "Select an agent...".to_string())
+                    )
+                    .show_ui(ui, |ui| {
+                        for agent in &self.available_agents {
+                            if let Some(agent_id) = agent.id {
+                                ui.selectable_value(
+                                    &mut self.selected_agent_id,
+                                    Some(agent_id),
+                                    &agent.name
+                                );
+                            }
                         }
                     });
+                
+                ui.add_space(10.0);
+                
+                ui.label("Additional Arguments:");
+                ui.text_edit_singleline(&mut self.worker_args);
+                
+                ui.add_space(20.0);
+                ui.separator();
+                ui.add_space(10.0);
+                
+                ui.horizontal(|ui| {
+                    if ui.button("Spawn").clicked() {
+                        if let Some(agent_id) = self.selected_agent_id {
+                            self.spawn_worker(agent_id);
+                            self.show_spawn_dialog = false;
+                            self.selected_agent_id = None;
+                            self.worker_args.clear();
+                        }
+                    }
+                    
+                    if ui.button("Cancel").clicked() {
+                        self.show_spawn_dialog = false;
+                        self.selected_agent_id = None;
+                        self.worker_args.clear();
+                    }
                 });
             });
     }
 
-    fn format_worker_type(&self, worker_type: &str) -> String {
-        match worker_type {
-            "developer" => "👨‍💻 Developer".to_string(),
-            "tester" => "🧪 Tester".to_string(),
-            "reviewer" => "👁️ Reviewer".to_string(),
-            "documentation" => "📝 Documentation".to_string(),
-            _ if worker_type.starts_with("custom_") => "⚙️ Custom".to_string(),
-            _ => worker_type.to_string(),
+    fn spawn_worker(&mut self, agent_id: i64) {
+        // Get agent details
+        let agent = match self.available_agents.iter().find(|a| a.id == Some(agent_id)) {
+            Some(agent) => agent,
+            None => {
+                self.error_message = Some("Agent not found".to_string());
+                return;
+            }
+        };
+
+        // Build command to spawn worker process
+        let mut cmd = Command::new("cargo");
+        cmd.arg("run")
+            .arg("--bin")
+            .arg("worker")
+            .arg("--")
+            .arg("--agent-id")
+            .arg(agent_id.to_string());
+
+        // Add any additional arguments
+        if !self.worker_args.is_empty() {
+            for arg in self.worker_args.split_whitespace() {
+                cmd.arg(arg);
+            }
+        }
+
+        // Spawn the process
+        match cmd.spawn() {
+            Ok(child) => {
+                let worker_id = self.next_worker_id;
+                self.next_worker_id += 1;
+
+                let worker_info = WorkerInfo {
+                    id: worker_id,
+                    agent_name: agent.name.clone(),
+                    agent_id,
+                    process: Arc::new(Mutex::new(child)),
+                    status: WorkerStatus::Running,
+                    started_at: Instant::now(),
+                    last_heartbeat: Instant::now(),
+                    logs: vec![format!("Worker spawned at {}", chrono::Local::now())],
+                };
+
+                self.workers.insert(worker_id, worker_info);
+                self.selected_worker = Some(worker_id);
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to spawn worker: {}", e));
+            }
         }
     }
 
-    fn format_status(&self, status: &str) -> String {
-        match status {
-            "starting" => "🟡 Starting".to_string(),
-            "running" => "🟢 Running".to_string(),
-            "idle" => "🔵 Idle".to_string(),
-            "busy" => "🟠 Busy".to_string(),
-            "stopped" => "⚫ Stopped".to_string(),
-            s if s.starts_with("failed") => format!("🔴 {}", s),
-            _ => status.to_string(),
+    fn stop_worker(&mut self, worker_id: u64) {
+        if let Some(worker) = self.workers.get_mut(&worker_id) {
+            if let Ok(mut process) = worker.process.lock() {
+                match process.kill() {
+                    Ok(_) => {
+                        worker.status = WorkerStatus::Stopped;
+                        worker.logs.push(format!("Worker stopped at {}", chrono::Local::now()));
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to stop worker: {}", e));
+                    }
+                }
+            }
         }
     }
 
-    fn status_color(&self, status: &str) -> Color32 {
-        match status {
-            "starting" => Color32::from_rgb(255, 255, 0),
-            "running" => Color32::from_rgb(0, 255, 0),
-            "idle" => Color32::from_rgb(0, 0, 255),
-            "busy" => Color32::from_rgb(255, 165, 0),
-            "stopped" => Color32::from_rgb(128, 128, 128),
-            s if s.starts_with("failed") => Color32::from_rgb(255, 0, 0),
-            _ => Color32::WHITE,
+    fn restart_worker(&mut self, worker_id: u64) {
+        if let Some(worker) = self.workers.get(&worker_id) {
+            let agent_id = worker.agent_id;
+            self.stop_worker(worker_id);
+            self.spawn_worker(agent_id);
+        }
+    }
+
+    fn refresh_worker_status(&mut self) {
+        let worker_ids: Vec<u64> = self.workers.keys().copied().collect();
+        
+        for worker_id in worker_ids {
+            if let Some(worker) = self.workers.get_mut(&worker_id) {
+                if let Ok(mut process) = worker.process.lock() {
+                    match process.try_wait() {
+                        Ok(Some(status)) => {
+                            if status.success() {
+                                worker.status = WorkerStatus::Stopped;
+                            } else {
+                                worker.status = WorkerStatus::Crashed;
+                            }
+                        }
+                        Ok(None) => {
+                            // Process is still running
+                            worker.status = WorkerStatus::Running;
+                        }
+                        Err(_) => {
+                            worker.status = WorkerStatus::Unknown;
+                        }
+                    }
+                }
+            }
         }
     }
 }
-
-// TODO: Implement integration with Tauri backend
-// These functions would call the Tauri commands we created
-/*
-async fn refresh_workers() -> Result<Vec<WorkerInfo>, String> {
-    // Call get_active_workers Tauri command
-    todo!()
-}
-
-async fn spawn_worker(config: WorkerSpawnConfig) -> Result<String, String> {
-    // Call spawn_worker Tauri command
-    todo!()
-}
-
-async fn terminate_worker(worker_id: String) -> Result<(), String> {
-    // Call terminate_worker Tauri command
-    todo!()
-}
-
-async fn send_message_to_worker(worker_id: String, message: String) -> Result<(), String> {
-    // Call send_message_to_worker Tauri command
-    todo!()
-}
-*/ 

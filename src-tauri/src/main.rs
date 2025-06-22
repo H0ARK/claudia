@@ -54,6 +54,11 @@ use commands::plugins::{
     init_plugin_registry, load_plugin, unload_plugin, list_plugins,
     find_plugin_for_agent_type, execute_plugin_task, scan_plugins, PluginState,
 };
+use commands::workers::{
+    init_worker_manager, spawn_worker, get_active_workers, get_workers_by_type,
+    terminate_worker, send_message_to_worker, get_worker_metrics, get_global_worker_metrics,
+    register_custom_worker_type, WorkerManagerState,
+};
 use std::sync::Mutex;
 use checkpoint::state::CheckpointState;
 use process::ProcessRegistryState;
@@ -106,6 +111,9 @@ fn main() {
             
             // Initialize plugin state
             app.manage(PluginState::default());
+            
+            // Initialize worker manager state
+            app.manage(WorkerManagerState::default());
             
             Ok(())
         })
@@ -213,7 +221,16 @@ fn main() {
             list_plugins,
             find_plugin_for_agent_type,
             execute_plugin_task,
-            scan_plugins
+            scan_plugins,
+            init_worker_manager,
+            spawn_worker,
+            get_active_workers,
+            get_workers_by_type,
+            terminate_worker,
+            send_message_to_worker,
+            get_worker_metrics,
+            get_global_worker_metrics,
+            register_custom_worker_type
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

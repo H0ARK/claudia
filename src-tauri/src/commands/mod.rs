@@ -1,7 +1,8 @@
-pub mod claude;
 pub mod agents;
-pub mod sandbox;
-pub mod usage;
+pub mod claude;
 pub mod mcp;
 pub mod orchestration;
-pub mod plugins; 
+pub mod plugins;
+pub mod sandbox;
+pub mod usage;
+pub mod workers; 

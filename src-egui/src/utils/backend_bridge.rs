@@ -46,6 +46,56 @@ impl BackendBridge {
             [],
         )?;
         
+        // Create workflows table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS workflows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                nodes TEXT NOT NULL, -- JSON
+                edges TEXT NOT NULL, -- JSON
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+        
+        // Create orchestrations table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS orchestrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                workflow_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+            )",
+            [],
+        )?;
+        
+        // Create tasks table for orchestration tasks
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                orchestration_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                agent_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                input_data TEXT, -- JSON
+                output_data TEXT, -- JSON
+                error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (orchestration_id) REFERENCES orchestrations(id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id)
+            )",
+            [],
+        )?;
+        
         Ok(Self {
             db_path,
             db: Arc::new(Mutex::new(conn)),
@@ -181,5 +231,120 @@ impl BackendBridge {
         )?;
         
         Ok(agent)
+    }
+    
+    // Workflow methods
+    pub fn save_workflow(&self, name: &str, description: &str, nodes: &str, edges: &str) -> Result<i64> {
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO workflows (name, description, nodes, edges) VALUES (?1, ?2, ?3, ?4)",
+            params![name, description, nodes, edges],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+    
+    pub fn update_workflow(&self, id: i64, name: &str, description: &str, nodes: &str, edges: &str) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "UPDATE workflows SET name = ?1, description = ?2, nodes = ?3, edges = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?5",
+            params![name, description, nodes, edges, id],
+        )?;
+        Ok(())
+    }
+    
+    pub fn list_workflows(&self) -> Result<Vec<(i64, String, String, String, String)>> {
+        let conn = self.db.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, nodes, edges FROM workflows ORDER BY created_at DESC"
+        )?;
+        
+        let workflows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2).unwrap_or_default(),
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+        
+        Ok(workflows)
+    }
+    
+    pub fn get_workflow(&self, id: i64) -> Result<(String, String, String, String)> {
+        let conn = self.db.lock().unwrap();
+        conn.query_row(
+            "SELECT name, description, nodes, edges FROM workflows WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1).unwrap_or_default(),
+                    row.get(2)?,
+                    row.get(3)?,
+                ))
+            }
+        ).map_err(Into::into)
+    }
+    
+    pub fn delete_workflow(&self, id: i64) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        conn.execute("DELETE FROM workflows WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+    
+    // Orchestration methods
+    pub fn create_orchestration(&self, name: &str, workflow_id: Option<i64>) -> Result<i64> {
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO orchestrations (name, workflow_id) VALUES (?1, ?2)",
+            params![name, workflow_id],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+    
+    pub fn start_orchestration(&self, id: i64) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "UPDATE orchestrations SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+    
+    pub fn complete_orchestration(&self, id: i64, success: bool) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        let status = if success { "completed" } else { "failed" };
+        conn.execute(
+            "UPDATE orchestrations SET status = ?1, completed_at = CURRENT_TIMESTAMP WHERE id = ?2",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+    
+    // Task methods
+    pub fn create_task(&self, orchestration_id: i64, name: &str, description: &str, agent_id: Option<i64>) -> Result<i64> {
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO tasks (orchestration_id, name, description, agent_id) VALUES (?1, ?2, ?3, ?4)",
+            params![orchestration_id, name, description, agent_id],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+    
+    pub fn update_task_status(&self, id: i64, status: &str, output: Option<&str>, error: Option<&str>) -> Result<()> {
+        let conn = self.db.lock().unwrap();
+        let timestamp_field = match status {
+            "running" => "started_at",
+            "completed" | "failed" => "completed_at",
+            _ => return Ok(()),
+        };
+        
+        conn.execute(
+            &format!("UPDATE tasks SET status = ?1, output_data = ?2, error = ?3, {} = CURRENT_TIMESTAMP WHERE id = ?4", timestamp_field),
+            params![status, output, error, id],
+        )?;
+        Ok(())
     }
 }

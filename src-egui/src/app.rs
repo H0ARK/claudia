@@ -1,5 +1,5 @@
 use crate::orchestration::OrchestrationEngine;
-use crate::ui::{AgentManagerView, OrchestratorView, WorkflowEditorView};
+use crate::ui::{AgentManagerView, OrchestratorView, WorkflowEditorView, WorkerManagerView};
 use crate::utils::BackendBridge;
 use eframe::CreationContext;
 use egui::Context;
@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub enum AppView {
     Orchestrator,
     AgentManager,
+    WorkerManager,
     WorkflowEditor,
     Metrics,
     Settings,
@@ -18,6 +19,7 @@ pub struct ClaudiaOrchestratorApp {
     current_view: AppView,
     orchestrator_view: OrchestratorView,
     agent_manager_view: AgentManagerView,
+    worker_manager_view: WorkerManagerView,
     workflow_editor_view: WorkflowEditorView,
     orchestration_engine: OrchestrationEngine,
     backend_bridge: Arc<BackendBridge>,
@@ -47,12 +49,14 @@ impl ClaudiaOrchestratorApp {
         // Initialize views
         let orchestrator_view = OrchestratorView::new();
         let agent_manager_view = AgentManagerView::new();
+        let worker_manager_view = WorkerManagerView::new();
         let workflow_editor_view = WorkflowEditorView::new();
 
         Self {
             current_view: AppView::Orchestrator,
             orchestrator_view,
             agent_manager_view,
+            worker_manager_view,
             workflow_editor_view,
             orchestration_engine,
             backend_bridge,
@@ -72,6 +76,7 @@ impl eframe::App for ClaudiaOrchestratorApp {
                 
                 ui.selectable_value(&mut self.current_view, AppView::Orchestrator, "📊 Orchestrator");
                 ui.selectable_value(&mut self.current_view, AppView::AgentManager, "🤖 Agents");
+                ui.selectable_value(&mut self.current_view, AppView::WorkerManager, "🚀 Workers");
                 ui.selectable_value(&mut self.current_view, AppView::WorkflowEditor, "🔀 Workflows");
                 ui.selectable_value(&mut self.current_view, AppView::Metrics, "📈 Metrics");
                 
@@ -101,6 +106,9 @@ impl eframe::App for ClaudiaOrchestratorApp {
             }
             AppView::AgentManager => {
                 self.agent_manager_view.show(ctx, &self.backend_bridge);
+            }
+            AppView::WorkerManager => {
+                self.worker_manager_view.show(ctx);
             }
             AppView::WorkflowEditor => {
                 self.workflow_editor_view.show(ctx);

@@ -1,23 +1,32 @@
-use crate::models::{Workflow, WorkflowNodeType, WorkflowTask};
-use egui::{Color32, Context, Pos2, Rect, RichText, Stroke, Vec2};
+use crate::models::{Workflow, WorkflowNodeType, WorkflowTask, WorkflowNode, WorkflowEdge, AgentRole, TaskInput, TaskOutput, DataType, DataSource, DataDestination, RetryPolicy, BackoffStrategy};
+use crate::utils::BackendBridge;
+use egui::{Color32, Context, Pos2, Rect, RichText, Stroke, Vec2, CursorIcon};
 use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct WorkflowEditorView {
     workflow: Option<Workflow>,
+    workflow_id: Option<i64>,
     selected_node: Option<Uuid>,
     dragging_node: Option<Uuid>,
     drag_offset: Vec2,
     canvas_offset: Vec2,
     zoom: f32,
-    connection_start: Option<Uuid>,
+    connection_start: Option<(Uuid, usize)>, // (node_id, output_index)
     node_positions: HashMap<Uuid, Pos2>,
+    show_load_dialog: bool,
+    available_workflows: Vec<(i64, String, String)>,
+    new_workflow_name: String,
+    new_workflow_description: String,
+    hovering_input: Option<(Uuid, usize)>, // (node_id, input_index)
 }
 
 impl WorkflowEditorView {
     pub fn new() -> Self {
         Self {
             workflow: None,
+            workflow_id: None,
             selected_node: None,
             dragging_node: None,
             drag_offset: Vec2::ZERO,
@@ -25,10 +34,15 @@ impl WorkflowEditorView {
             zoom: 1.0,
             connection_start: None,
             node_positions: HashMap::new(),
+            show_load_dialog: false,
+            available_workflows: Vec::new(),
+            new_workflow_name: String::new(),
+            new_workflow_description: String::new(),
+            hovering_input: None,
         }
     }
 
-    pub fn show(&mut self, ctx: &Context) {
+    pub fn show(&mut self, ctx: &Context, backend_bridge: &Arc<BackendBridge>) {
         // Top toolbar
         egui::TopBottomPanel::top("workflow_toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -37,17 +51,23 @@ impl WorkflowEditorView {
                         "New Workflow".to_string(),
                         "Description".to_string(),
                     ));
+                    self.workflow_id = None;
+                    self.node_positions.clear();
                 }
                 
                 ui.separator();
                 
                 if self.workflow.is_some() {
                     if ui.button("💾 Save").clicked() {
-                        // TODO: Save workflow
+                        self.save_workflow(backend_bridge);
                     }
                     
                     if ui.button("📂 Load").clicked() {
-                        // TODO: Load workflow
+                        self.show_load_dialog = true;
+                        // Load available workflows
+                        if let Ok(workflows) = backend_bridge.list_workflows() {
+                            self.available_workflows = workflows;
+                        }
                     }
                     
                     ui.separator();
@@ -97,6 +117,11 @@ impl WorkflowEditorView {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.show_canvas(ui);
         });
+        
+        // Load workflow dialog
+        if self.show_load_dialog {
+            self.show_load_workflow_dialog(ctx, backend_bridge);
+        }
     }
 
     fn show_node_palette(&self, ui: &mut egui::Ui) {
@@ -338,8 +363,76 @@ impl WorkflowEditorView {
         }
     }
 
-    fn draw_connections(&self, _ui: &mut egui::Ui, _workflow: &Workflow) {
-        // TODO: Draw bezier curves between connected nodes
+    fn draw_connections(&self, ui: &mut egui::Ui, workflow: &Workflow) {
+        let painter = ui.painter();
+        
+        // Draw all edges
+        for (from_idx, to_idx, _edge) in &workflow.graph.edges {
+            // Find the nodes
+            let from_node = workflow.graph.nodes.get(*from_idx);
+            let to_node = workflow.graph.nodes.get(*to_idx);
+            
+            if let (Some(from_node), Some(to_node)) = (from_node, to_node) {
+                let from_pos = self.node_positions.get(&from_node.id)
+                    .copied()
+                    .unwrap_or(Pos2::new(from_node.position.0, from_node.position.1));
+                let to_pos = self.node_positions.get(&to_node.id)
+                    .copied()
+                    .unwrap_or(Pos2::new(to_node.position.0, to_node.position.1));
+                
+                let from_screen = from_pos * self.zoom + self.canvas_offset;
+                let to_screen = to_pos * self.zoom + self.canvas_offset;
+                
+                // Draw bezier curve
+                let from_right = from_screen + Vec2::new(75.0 * self.zoom, 0.0);
+                let to_left = to_screen - Vec2::new(75.0 * self.zoom, 0.0);
+                
+                let control_offset = ((to_left.x - from_right.x).abs() * 0.5).max(50.0);
+                let control1 = from_right + Vec2::new(control_offset, 0.0);
+                let control2 = to_left - Vec2::new(control_offset, 0.0);
+                
+                painter.add(egui::Shape::CubicBezier(egui::epaint::CubicBezierShape {
+                    points: [from_right, control1, control2, to_left],
+                    closed: false,
+                    fill: Color32::TRANSPARENT,
+                    stroke: Stroke::new(2.0 * self.zoom, Color32::from_rgb(100, 150, 255)),
+                }));
+                
+                // Draw arrow
+                let arrow_size = 8.0 * self.zoom;
+                let arrow_angle = std::f32::consts::PI / 6.0;
+                let dir = (to_left - control2).normalized();
+                
+                let arrow_point1 = to_left - dir * arrow_size * arrow_angle.cos() 
+                    + Vec2::new(-dir.y, dir.x) * arrow_size * arrow_angle.sin();
+                let arrow_point2 = to_left - dir * arrow_size * arrow_angle.cos() 
+                    - Vec2::new(-dir.y, dir.x) * arrow_size * arrow_angle.sin();
+                
+                painter.add(egui::Shape::convex_polygon(
+                    vec![to_left, arrow_point1, arrow_point2],
+                    Color32::from_rgb(100, 150, 255),
+                    Stroke::NONE,
+                ));
+            }
+        }
+        
+        // Draw temporary connection while dragging
+        if let Some((from_node_id, output_idx)) = self.connection_start {
+            if let Some(from_node) = workflow.graph.nodes.iter().find(|n| n.id == from_node_id) {
+                let from_pos = self.node_positions.get(&from_node_id)
+                    .copied()
+                    .unwrap_or(Pos2::new(from_node.position.0, from_node.position.1));
+                let from_screen = from_pos * self.zoom + self.canvas_offset;
+                let from_right = from_screen + Vec2::new(75.0 * self.zoom, 0.0);
+                
+                if let Some(pointer_pos) = ui.ctx().pointer_latest_pos() {
+                    painter.line_segment(
+                        [from_right, pointer_pos],
+                        Stroke::new(2.0 * self.zoom, Color32::from_rgba_premultiplied(100, 150, 255, 128)),
+                    );
+                }
+            }
+        }
     }
 
     fn draw_nodes(&mut self, ui: &mut egui::Ui) {
